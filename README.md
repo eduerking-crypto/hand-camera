@@ -1,27 +1,34 @@
-# Hand Camera
+# Hand Camera - Pizarra Inteligente
 
-Hand tracking and camera-based interaction using OpenCV, MediaPipe, and computer vision.
+Dibuja en una pizarra virtual usando **gestos de tu mano** frente a la cámara web.
 
-## Stack
+## Gestos
 
-- Python 3.14+
-- OpenCV 5.0
-- MediaPipe 0.10
-- dlib 20.0
-- scikit-learn, PyTorch, Flask/FastAPI
+| Gesto | Accion |
+|-------|--------|
+| **Indice alzado** | Mover cursor |
+| **Pinza (pulgar + indice juntos)** | Dibujar / escribir |
+| **2 dedos (paz)** | Siguiente herramienta |
+| **5 dedos + pinza** | Limpiar pizarra |
+| **Senal de paz (2 dedos, sin pinza)** | Cambiar herramienta |
 
-## Install
+## Herramientas
+
+- **Lapiz** - trazo fino negro
+- **Marcador** - trazo grueso
+- **Resaltador** - trazo amarillo ancho
+- **Borrador** - borra por areas
+
+## Instalacion
 
 ```bash
 pip install -r requirements.txt
-```
-
-## Usage
-
-```bash
+python download_models.py
 python main.py
 ```
 
-## License
+## Controles teclado
 
-MIT
+- `ESC` - Salir
+- `C` - Limpiar pizarra
+- `S` - Guardar captura (pizarra.png)
