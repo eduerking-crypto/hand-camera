@@ -8,79 +8,79 @@ MIRROR = True
 Base = mp.tasks.BaseOptions
 HL = mp.tasks.vision.HandLandmarker
 HLO = mp.tasks.vision.HandLandmarkerOptions
-VRM = mp.tasks.vision.RunningMode
 
 colors = [(30,30,30),(200,40,40),(40,140,40),(40,40,200),(200,160,40),(160,40,160)]
-palette_w = 40
-
 canvas = np.ones((H, W, 3), dtype=np.uint8) * 255
 prev = None
 sp = None
-hand = {"lms": None}
 size = 4
 ci = 0
 
-def d(a, b):
-    return ((a.x-b.x)**2 + (a.y-b.y)**2)**0.5
+opts = HLO(base_options=Base(model_asset_path=MODEL),
+           running_mode=mp.tasks.vision.RunningMode.IMAGE,
+           num_hands=1, min_hand_detection_confidence=0.5)
+det = HL.create_from_options(opts)
 
-def cb(result, img, ts):
-    global hand
-    hand["lms"] = None
-    if result.hand_landmarks:
-        hand["lms"] = result.hand_landmarks[0]
-
-print("Cargando...")
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-opts = HLO(base_options=Base(model_asset_path=MODEL),
-           running_mode=VRM.LIVE_STREAM, result_callback=cb,
-           num_hands=1, min_hand_detection_confidence=0.6)
-det = HL.create_from_options(opts)
+print("PIZARRA - Pinza para dibujar | ESC=salir | C=limpiar | 1-6=color | +/-=tamano")
 
-print("Pinza (pulgar+indice) = dibujar | ESC=salir | C=limpiar | 1-6=color | +/-=tamano")
-
-ts = 0
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret: break
     if MIRROR: frame = cv2.flip(frame, 1)
-    mpimg = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-    ts += 1
-    det.detect_async(mpimg, ts)
+    hf, wf = frame.shape[:2]
+
+    mpimg = mp.Image(image_format=mp.ImageFormat.SRGB,
+                     data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    result = det.detect(mpimg)
 
     disp = canvas.copy()
-    lms = hand["lms"]
+    col = colors[ci]
+    drawing = False
+    sx, sy = -100, -100
 
     for i, c in enumerate(colors):
-        x = 10 + i * (palette_w + 6)
-        cv2.rectangle(disp, (x,8), (x+palette_w,38), c, -1)
+        x = 10 + i * 46
+        cv2.rectangle(disp, (x,8), (x+40,36), c, -1)
         if i == ci:
-            cv2.rectangle(disp, (x-2,6), (x+palette_w+2,40), (0,200,0), 2)
+            cv2.rectangle(disp, (x-2,6), (x+42,38), (0,200,0), 2)
 
-    if lms:
+    if result.hand_landmarks:
+        lms = result.hand_landmarks[0]
         cx = int(lms[8].x * W)
         cy = int(lms[8].y * H)
         if sp is None: sp = (cx, cy)
-        sp = (int(sp[0]*0.6 + cx*0.4), int(sp[1]*0.6 + cy*0.4))
+        sp = (int(sp[0]*0.55 + cx*0.45), int(sp[1]*0.55 + cy*0.45))
         sx, sy = sp
-        pinch = d(lms[4], lms[8]) < 0.07
-        color = colors[ci]
 
-        px, py = int(lms[8].x * frame.shape[1]), int(lms[8].y * frame.shape[0])
-        cv2.circle(frame, (px,py), 6, (0,255,0), 2)
+        t4, t8 = lms[4], lms[8]
+        drawing = ((t4.x-t8.x)**2 + (t4.y-t8.y)**2)**0.5 < 0.10
 
-        if pinch and sy > 45:
+        px, py = int(t8.x*wf), int(t8.y*hf)
+        cv2.circle(frame, (px,py), 8, (0,255,0), 2)
+        for i in [4,8,12,16,20]:
+            lx, ly = int(lms[i].x*wf), int(lms[i].y*hf)
+            cv2.circle(frame, (lx,ly), 4, (255,255,0), -1)
+
+        if drawing and sy > 45:
             if prev:
-                cv2.line(disp, prev, (sx,sy), color, size, cv2.LINE_AA)
+                cv2.line(disp, prev, (sx,sy), col, size, cv2.LINE_AA)
             prev = (sx, sy)
-            cv2.circle(disp, (sx,sy), size//2, color, -1)
+            cv2.circle(disp, (sx,sy), max(2,size//2), col, -1)
         else:
             prev = None
-            cv2.circle(disp, (sx,sy), 5, color, 2)
-            cv2.line(disp, (sx-8,sy), (sx+8,sy), color, 2)
-            cv2.line(disp, (sx,sy-8), (sx,sy+8), color, 2)
+
+    if not drawing and sy > 45:
+        cv2.circle(disp, (sx,sy), 6, col, 2)
+        cv2.line(disp, (sx-10,sy), (sx+10,sy), col, 2)
+        cv2.line(disp, (sx,sy-10), (sx,sy+10), col, 2)
+        if result.hand_landmarks:
+            p = ((lms[4].x-lms[8].x)**2 + (lms[4].y-lms[8].y)**2)**0.5
+            cv2.putText(frame, f"{p:.2f}", (10,20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,200), 1)
 
     px, py = 10, H - CH - 10
     fr = cv2.resize(frame, (CW, CH))
@@ -97,7 +97,7 @@ while cap.isOpened():
     elif key == ord('4'): ci = 3
     elif key == ord('5'): ci = 4
     elif key == ord('6'): ci = 5
-    elif key == ord('=') or key == ord('+'): size = min(30, size + 2)
+    elif key == ord('=') or key == ord('+'): size = min(40, size + 2)
     elif key == ord('-') or key == ord('_'): size = max(2, size - 2)
     elif key == ord('m'): MIRROR = not MIRROR
 
