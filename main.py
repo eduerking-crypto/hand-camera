@@ -6,6 +6,7 @@ from pathlib import Path
 MODEL = "hand_landmarker.task"
 WBOARD_W, WBOARD_H = 1280, 720
 CAM_W, CAM_H = 240, 180
+MIRROR = True
 
 BaseOptions = mp.tasks.BaseOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
@@ -94,7 +95,8 @@ while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
         break
-    frame = cv2.flip(frame, 1)
+    if MIRROR:
+        frame = cv2.flip(frame, 1)
     fh, fw = frame.shape[:2]
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     mpimg = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
@@ -182,7 +184,8 @@ while cap.isOpened():
     display[pipe_y:pipe_y + CAM_H, pipe_x:pipe_x + CAM_W] = frame_resized
     cv2.rectangle(display, (pipe_x, pipe_y), (pipe_x + CAM_W, pipe_y + CAM_H), (100, 100, 100), 2)
     display[pipe_y - 22:pipe_y, pipe_x:pipe_x + CAM_W] = (50, 50, 50)
-    cv2.putText(display, "CAMARA", (pipe_x + 5, pipe_y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+    mode = "ESPEJO" if MIRROR else "NATURAL"
+    cv2.putText(display, f"CAMARA [{mode}]", (pipe_x + 5, pipe_y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
 
     draw_status(display, f"{status} | [ESC] salir", status_color)
 
@@ -195,6 +198,9 @@ while cap.isOpened():
     elif key == ord('s'):
         cv2.imwrite("pizarra.png", canvas)
         print("Captura guardada: pizarra.png")
+    elif key == ord('m'):
+        MIRROR = not MIRROR
+        print(f"Modo espejo: {'ON' if MIRROR else 'OFF'}")
 
 landmarker.close()
 cap.release()
