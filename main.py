@@ -1,207 +1,229 @@
-import cv2
-import mediapipe as mp
-import numpy as np
-from pathlib import Path
+import cv2, mediapipe as mp, numpy as np
 
 MODEL = "hand_landmarker.task"
-WBOARD_W, WBOARD_H = 1280, 720
-CAM_W, CAM_H = 240, 180
+W, H = 1280, 720
+CW, CH = 220, 165
 MIRROR = True
 
-BaseOptions = mp.tasks.BaseOptions
-HandLandmarker = mp.tasks.vision.HandLandmarker
-HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
-VisionRunningMode = mp.tasks.vision.RunningMode
+Base = mp.tasks.BaseOptions
+HL = mp.tasks.vision.HandLandmarker
+HLO = mp.tasks.vision.HandLandmarkerOptions
+VRM = mp.tasks.vision.RunningMode
 
 tools = [
-    {"name": "lapiz",  "color": (30, 30, 30),   "size": 3,   "icon": "\u270E"},
-    {"name": "marcador", "color": (30, 30, 30),  "size": 10,  "icon": "\u2B1B"},
-    {"name": "resalte", "color": (255, 255, 0),  "size": 25,  "icon": "\u2B1C"},
-    {"name": "borrador", "color": (255, 255, 255), "size": 30, "icon": "\u2B55"},
+    {"n":"lapiz","c":(30,30,30),"s":2,"ic":"\u270E"},
+    {"n":"pluma","c":(30,30,30),"s":4,"ic":"\u2712"},
+    {"n":"marcador","c":(30,30,30),"s":10,"ic":"\u2B1B"},
+    {"n":"resalte","c":(255,255,0),"s":25,"ic":"\u2B1C"},
+    {"n":"borrador","c":(255,255,255),"s":35,"ic":"\u2B55"},
 ]
-palette = [
-    (30, 30, 30), (220, 50, 50), (50, 150, 50), (50, 50, 220),
-    (220, 180, 50), (150, 50, 150), (50, 180, 180), (255, 255, 255),
-]
+palette = [(30,30,30),(200,40,40),(40,140,40),(40,40,200),
+           (200,160,40),(160,40,160),(40,160,160),(255,255,255),
+           (255,100,50),(100,200,255)]
 
-hand_data = {"lms": None, "fingers": []}
-pen_down = False
-current_tool = 0
-current_color = 0
-canvas = np.ones((WBOARD_H, WBOARD_W, 3), dtype=np.uint8) * 255
-prev_pos = None
-smooth_pos = None
+MODE_NAV, MODE_DRAW, MODE_ERASE = 0, 1, 2
+mode = MODE_NAV
+tool_idx = 0
+color_idx = 0
+canvas = np.ones((H, W, 3), dtype=np.uint8) * 255
+prev = None
+sp = None
+hand = {"lms": None, "f": []}
+last_gesture = ""
+gesture_timer = 0
 
-def get_fingers(lms):
-    h = []
-    h.append(1 if lms[4].x < lms[3].x else 0)
-    for tip, pip in [(8, 6), (12, 10), (16, 14), (20, 18)]:
-        h.append(1 if lms[tip].y < lms[pip].y else 0)
-    return h
+def gf(lms):
+    f = [1 if lms[4].x < lms[3].x else 0]
+    for t, p in [(8,6),(12,10),(16,14),(20,18)]:
+        f.append(1 if lms[t].y < lms[p].y else 0)
+    return f
 
-def dist(a, b):
-    return np.sqrt((a.x - b.x)**2 + (a.y - b.y)**2)
+def d(a, b):
+    return ((a.x-b.x)**2 + (a.y-b.y)**2) ** 0.5
 
-def result_cb(result, image, ts):
-    global hand_data
-    hand_data["lms"] = None
-    hand_data["fingers"] = []
+def cb(result, img, ts):
+    global hand
+    hand["lms"] = None
+    hand["f"] = []
     if result.hand_landmarks:
-        lms = result.hand_landmarks[0]
-        hand_data["lms"] = lms
-        hand_data["fingers"] = get_fingers(lms)
+        l = result.hand_landmarks[0]
+        hand["lms"] = l
+        hand["f"] = gf(l)
 
-print("Iniciando...")
+print("Cargando...")
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-options = HandLandmarkerOptions(
-    base_options=BaseOptions(model_asset_path=MODEL),
-    running_mode=VisionRunningMode.LIVE_STREAM,
-    result_callback=result_cb, num_hands=1,
-    min_hand_detection_confidence=0.6
-)
-landmarker = HandLandmarker.create_from_options(options)
-
-def draw_toolbar(img):
-    h, w = img.shape[:2]
-    cv2.rectangle(img, (0, 0), (w, 40), (240, 240, 240), -1)
-    cv2.rectangle(img, (0, 40), (w, 42), (200, 200, 200), 1)
-    for i, t in enumerate(tools):
-        x = 10 + i * 70
-        color = (100, 100, 255) if i == current_tool else (180, 180, 180)
-        cv2.rectangle(img, (x, 5), (x + 60, 35), color, 2 if i == current_tool else 1)
-        cv2.putText(img, t["icon"], (x + 18, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (60, 60, 60), 2)
-    for i, c in enumerate(palette):
-        x = w - 280 + i * 30
-        cv2.rectangle(img, (x, 8), (x + 24, 32), c, -1)
-        if i == current_color:
-            cv2.rectangle(img, (x - 2, 6), (x + 26, 34), (0, 200, 0), 2)
-
-def draw_status(img, text, color=(60, 60, 60)):
-    h, w = img.shape[:2]
-    cv2.rectangle(img, (0, h - 28), (w, h), (240, 240, 240), -1)
-    cv2.putText(img, text, (10, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+opts = HLO(base_options=Base(model_asset_path=MODEL),
+           running_mode=VRM.LIVE_STREAM, result_callback=cb,
+           num_hands=1, min_hand_detection_confidence=0.6)
+detector = HL.create_from_options(opts)
 
 ts = 0
-print("Pizarra lista! ESC para salir")
-print("  Pinza (pulgar+indice) = dibujar/levantar lapiz")
-print("  Index finger = cursor")
-print("  Senal de paz (2 dedos) = siguiente herramienta")
-print("  Mano abierta (5 dedos) = limpiar todo")
+print("PIZARRA INTELIGENTE")
+print("  Pinza (tap)  = dibujar / soltar")
+print("  2 dedos      = borrador")
+print("  3 dedos      = siguiente color")
+print("  4 dedos      = siguiente herramienta")
+print("  5 dedos      = limpiar todo")
+print("  M            = alternar espejo")
+print("  S            = guardar")
+print("  U            = deshacer")
+print("  ESC          = salir")
+
+undos = []
 
 while cap.isOpened():
     ret, frame = cap.read()
-    if not ret:
-        break
-    if MIRROR:
-        frame = cv2.flip(frame, 1)
+    if not ret: break
+    if MIRROR: frame = cv2.flip(frame, 1)
     fh, fw = frame.shape[:2]
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mpimg = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    mpimg = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     ts += 1
-    landmarker.detect_async(mpimg, ts)
+    detector.detect_async(mpimg, ts)
 
-    display = canvas.copy()
-    draw_toolbar(display)
+    disp = canvas.copy()
+    lms = hand["lms"]
+    f = hand["f"]
 
-    lms = hand_data["lms"]
-    fingers = hand_data["fingers"]
-    status = "Sin mano detectada"
-    status_color = (150, 150, 150)
+    cv2.rectangle(disp, (0,0), (W,42), (235,235,235), -1)
+    cv2.rectangle(disp, (0,42), (W,44), (200,200,200), 1)
 
-    if lms and fingers:
-        x = int(lms[8].x * fw)
-        y = int(lms[8].y * fh)
-        cv2.circle(frame, (x, y), 8, (0, 255, 0), 2)
-        cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
+    for i, t in enumerate(tools):
+        x = 8 + i * 70
+        sel = i == tool_idx
+        cl = (80,80,200) if sel else (180,180,180)
+        cv2.rectangle(disp, (x,4), (x+62,38), cl, 2 if sel else 1)
+        cv2.putText(disp, t["ic"], (x+18, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (50,50,50), 2)
 
+    for i, c in enumerate(palette):
+        x = W - 320 + i * 30
+        cv2.rectangle(disp, (x,7), (x+24,35), c, -1)
+        if i == color_idx:
+            cv2.rectangle(disp, (x-2,5), (x+26,37), (0,200,0), 2)
+
+    mode_names = ["NAVEGAR", "DIBUJAR", "BORRAR"]
+    mode_colors = [(100,100,100),(50,150,50),(200,60,60)]
+    mx = W // 2 - 60
+    cv2.rectangle(disp, (mx,5), (mx+120,36), mode_colors[mode], -1)
+    cv2.putText(disp, mode_names[mode], (mx+10,27), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+
+    if lms and f:
+        cx = int(lms[8].x * W)
+        cy = int(lms[8].y * H)
+        if sp is None: sp = (cx, cy)
+        sp = (int(sp[0]*0.65 + cx*0.35), int(sp[1]*0.65 + cy*0.35))
+        sx, sy = sp
+        pinch = d(lms[4], lms[8]) < 0.065
+        fc = sum(f)
+        cur_tool = tools[tool_idx]
+        cur_color = palette[color_idx]
+
+        px, py = int(lms[8].x*fw), int(lms[8].y*fh)
         for i, lm in enumerate(lms):
-            cx, cy = int(lm.x * fw), int(lm.y * fh)
-            if i in [4, 8, 12, 16, 20]:
-                cv2.circle(frame, (cx, cy), 4, (255, 255, 0), -1)
+            lx, ly = int(lm.x*fw), int(lm.y*fh)
+            if i in [4,8,12,16,20]:
+                cv2.circle(frame, (lx,ly), 4, (255,255,0), -1)
+        cv2.circle(frame, (px,py), 7, (0,255,0), 2)
+        cv2.circle(frame, (px,py), 3, (0,255,0), -1)
 
-        cx = int(lms[8].x * WBOARD_W)
-        cy = int(lms[8].y * WBOARD_H)
-        if smooth_pos is None:
-            smooth_pos = (cx, cy)
-        smooth_pos = (int(smooth_pos[0] * 0.7 + cx * 0.3),
-                      int(smooth_pos[1] * 0.7 + cy * 0.3))
-        sx, sy = smooth_pos
-
-        pinch = dist(lms[4], lms[8]) < 0.08
-        fcount = sum(fingers)
-
-        if pinch and sy > 45 and sy < WBOARD_H - 35:
-            if not pen_down:
-                pen_down = True
-                prev_pos = None
-            t = tools[current_tool]
-            if t["name"] == "borrador":
-                cv2.circle(display, (sx, sy), t["size"], (255, 255, 255), -1)
-            else:
-                color = palette[current_color] if t["name"] != "resalte" else t["color"]
-                if prev_pos:
-                    cv2.line(display, prev_pos, (sx, sy), color, t["size"] * 2, cv2.LINE_AA)
-                cv2.circle(display, (sx, sy), max(1, t["size"] // 2), color, -1)
-            prev_pos = (sx, sy)
-            status = f"Dibujando con {t['name']} - {palette[current_color]}"
-            status_color = palette[current_color]
-        else:
-            if pen_down:
-                pen_down = False
-                prev_pos = None
-            t = tools[current_tool]
-            if sy > 45 and sy < WBOARD_H - 35:
-                clr = palette[current_color]
-                cv2.circle(display, (sx, sy), max(4, t["size"] // 2), clr, 2)
-                cv2.line(display, (sx - 8, sy), (sx + 8, sy), clr, 2)
-                cv2.line(display, (sx, sy - 8), (sx, sy + 8), clr, 2)
-            status = f"{fcount} dedos | Pinza para dibujar"
-            status_color = (60, 60, 60)
-
-        if sy < 42:
-            tool_idx = max(0, min(len(tools) - 1, (sx - 10) // 70))
-            if pinch:
-                current_tool = tool_idx
-        if sy > 5 and sy < 40:
-            ci = max(0, min(len(palette) - 1, (sx - (WBOARD_W - 280)) // 30))
-            if 0 <= ci < len(palette) and sx >= WBOARD_W - 280 and pinch:
-                current_color = ci
-
-        if fcount >= 4 and pinch:
+        if fc == 5:
+            if last_gesture != "clear":
+                undos.append(canvas.copy())
+                if len(undos) > 20: undos.pop(0)
             canvas[:] = 255
-            status = "Pizarra limpiada!"
-            status_color = (50, 180, 50)
+            last_gesture = "clear"
+            mode = MODE_NAV
+            gest_text = "LIMPIAR"
+            cv2.putText(disp, gest_text, (W//2-40, H//2), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (50,180,50), 3)
+        elif fc == 4:
+            if last_gesture != "tool_next":
+                tool_idx = (tool_idx + 1) % len(tools)
+            last_gesture = "tool_next"
+            gest_text = f"HERRAMIENTA: {tools[tool_idx]['n'].upper()}"
+            cv2.putText(disp, gest_text, (W//2-130, H//2), cv2.FONT_HERSHEY_SIMPLEX, 1, (100,100,200), 3)
+        elif fc == 3:
+            if last_gesture != "color_next":
+                color_idx = (color_idx + 1) % len(palette)
+            last_gesture = "color_next"
+            cc = palette[color_idx]
+            gest_text = f"COLOR {color_idx+1}"
+            cv2.rectangle(disp, (W//2-50, H//2-15), (W//2+50, H//2+15), cc, -1)
+            cv2.putText(disp, gest_text, (W//2-40, H//2+5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+        elif fc == 2 and not pinch:
+            if last_gesture != "erase_mode":
+                mode = MODE_ERASE if mode != MODE_ERASE else MODE_NAV
+            last_gesture = "erase_mode"
+            if mode == MODE_ERASE:
+                cv2.putText(disp, "BORRADOR", (W//2-60, H//2), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (200,60,60), 3)
+        elif pinch:
+            if last_gesture != "draw_toggle":
+                mode = MODE_DRAW if mode != MODE_DRAW else MODE_NAV
+                prev = None
+            last_gesture = "draw_toggle"
+            if mode == MODE_DRAW:
+                cv2.putText(disp, "DIBUJAR", (W//2-50, H//2), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (50,150,50), 3)
+        elif fc == 1:
+            last_gesture = "navegar"
+            mode = MODE_NAV
 
-        if fingers == [0, 1, 1, 0, 0] and not pinch:
-            current_tool = (current_tool + 1) % len(tools)
+        if mode == MODE_DRAW and sy > 46 and sy < H - 30:
+            if cur_tool["n"] == "borrador":
+                cv2.circle(disp, (sx,sy), cur_tool["s"], (255,255,255), -1)
+            else:
+                col = cur_color if cur_tool["n"] != "resalte" else (255,255,0)
+                if prev:
+                    cv2.line(disp, prev, (sx,sy), col, cur_tool["s"]*2, cv2.LINE_AA)
+                prev = (sx,sy)
+            cv2.circle(disp, (sx,sy), 5, (0,200,0), 2)
+        elif mode == MODE_ERASE and sy > 46 and sy < H - 30:
+            cv2.circle(disp, (sx,sy), cur_tool["s"], (255,255,255), -1)
+            cv2.circle(disp, (sx,sy), 5, (0,0,200), 2)
+        else:
+            prev = None
+            if fc == 1 and sy > 46 and sy < H - 30:
+                cv2.circle(disp, (sx,sy), 6, cur_color, 2)
+                cv2.line(disp, (sx-10,sy), (sx+10,sy), cur_color, 2)
+                cv2.line(disp, (sx,sy-10), (sx,sy+10), cur_color, 2)
 
-    pipe_x = 15
-    pipe_y = WBOARD_H - CAM_H - 15
-    frame_resized = cv2.resize(frame, (CAM_W, CAM_H))
-    display[pipe_y:pipe_y + CAM_H, pipe_x:pipe_x + CAM_W] = frame_resized
-    cv2.rectangle(display, (pipe_x, pipe_y), (pipe_x + CAM_W, pipe_y + CAM_H), (100, 100, 100), 2)
-    display[pipe_y - 22:pipe_y, pipe_x:pipe_x + CAM_W] = (50, 50, 50)
-    mode = "ESPEJO" if MIRROR else "NATURAL"
-    cv2.putText(display, f"CAMARA [{mode}]", (pipe_x + 5, pipe_y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        if fc < 5 and last_gesture not in ["clear"]:
+            pass
 
-    draw_status(display, f"{status} | [ESC] salir", status_color)
+        if f == [0,1,1,0,0] and pinch:
+            if last_gesture != "tool_select":
+                tool_idx = (tool_idx + 1) % len(tools)
+            last_gesture = "tool_select"
+    else:
+        last_gesture = ""
+        mode = MODE_NAV
 
-    cv2.imshow("Pizarra Inteligente - Hand Camera", display)
+    px, py = 12, H - CH - 12
+    fr = cv2.resize(frame, (CW, CH))
+    disp[py:py+CH, px:px+CW] = fr
+    cv2.rectangle(disp, (px,py), (px+CW, py+CH), (80,80,80), 2)
+    cv2.rectangle(disp, (px,py-20), (px+CW, py), (40,40,40), -1)
+    m = "ESPEJO" if MIRROR else "NATURAL"
+    cv2.putText(disp, f"CAM {m}", (px+4, py-6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180,180,180), 1)
+
+    st = f"{mode_names[mode]} | {tools[tool_idx]['n']} | color #{color_idx+1}"
+    cv2.rectangle(disp, (0,H-26), (W,H), (235,235,235), -1)
+    cv2.putText(disp, st, (8, H-8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (60,60,60), 1)
+    cv2.putText(disp, "ESC=salir M=espejo S=guardar U=undo", (W-280, H-8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120,120,120), 1)
+
+    cv2.imshow("Pizarra Inteligente - Hand Camera", disp)
     key = cv2.waitKey(1) & 0xFF
-    if key == 27:
-        break
-    elif key == ord('c'):
-        canvas[:] = 255
+    if key == 27: break
+    elif key == ord('c'): canvas[:] = 255
     elif key == ord('s'):
         cv2.imwrite("pizarra.png", canvas)
-        print("Captura guardada: pizarra.png")
+        print("Guardado: pizarra.png")
+    elif key == ord('u'):
+        if undos:
+            canvas = undos.pop()
     elif key == ord('m'):
         MIRROR = not MIRROR
-        print(f"Modo espejo: {'ON' if MIRROR else 'OFF'}")
 
-landmarker.close()
+detector.close()
 cap.release()
 cv2.destroyAllWindows()
