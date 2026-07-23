@@ -13,7 +13,7 @@ colors = [(30,30,30),(200,40,40),(40,140,40),(40,40,200),(200,160,40),(160,40,16
 canvas = np.ones((H, W, 3), dtype=np.uint8) * 255
 prev = None
 sp = None
-size = 4
+size = 6
 ci = 0
 
 opts = HLO(base_options=Base(model_asset_path=MODEL),
@@ -25,14 +25,13 @@ cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-print("PIZARRA - Pinza para dibujar | ESC=salir | C=limpiar | 1-6=color | +/-=tamano")
+print("PIZARRA - Junta pulgar+indice para dibujar")
 
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret: break
     if MIRROR: frame = cv2.flip(frame, 1)
     hf, wf = frame.shape[:2]
-
     mpimg = mp.Image(image_format=mp.ImageFormat.SRGB,
                      data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     result = det.detect(mpimg)
@@ -41,6 +40,7 @@ while cap.isOpened():
     col = colors[ci]
     drawing = False
     sx, sy = -100, -100
+    hand_ok = bool(result.hand_landmarks)
 
     for i, c in enumerate(colors):
         x = 10 + i * 46
@@ -48,7 +48,7 @@ while cap.isOpened():
         if i == ci:
             cv2.rectangle(disp, (x-2,6), (x+42,38), (0,200,0), 2)
 
-    if result.hand_landmarks:
+    if hand_ok:
         lms = result.hand_landmarks[0]
         cx = int(lms[8].x * W)
         cy = int(lms[8].y * H)
@@ -57,35 +57,37 @@ while cap.isOpened():
         sx, sy = sp
 
         t4, t8 = lms[4], lms[8]
-        drawing = ((t4.x-t8.x)**2 + (t4.y-t8.y)**2)**0.5 < 0.10
+        d = ((t4.x-t8.x)**2 + (t4.y-t8.y)**2)**0.5
+        drawing = d < 0.10
 
         px, py = int(t8.x*wf), int(t8.y*hf)
-        cv2.circle(frame, (px,py), 8, (0,255,0), 2)
+        cv2.circle(frame, (px,py), 6, (0,255,0), 2)
         for i in [4,8,12,16,20]:
             lx, ly = int(lms[i].x*wf), int(lms[i].y*hf)
-            cv2.circle(frame, (lx,ly), 4, (255,255,0), -1)
+            cv2.circle(frame, (lx,ly), 3, (255,255,0), -1)
 
-        if drawing and sy > 45:
+        if drawing:
             if prev:
                 cv2.line(disp, prev, (sx,sy), col, size, cv2.LINE_AA)
             prev = (sx, sy)
-            cv2.circle(disp, (sx,sy), max(2,size//2), col, -1)
+            cv2.circle(disp, (sx,sy), size//2 + 2, col, -1)
+            cv2.putText(frame, "DIBUJANDO", (10,20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,200,0), 2)
         else:
             prev = None
 
-    if not drawing and sy > 45:
-        cv2.circle(disp, (sx,sy), 6, col, 2)
-        cv2.line(disp, (sx-10,sy), (sx+10,sy), col, 2)
-        cv2.line(disp, (sx,sy-10), (sx,sy+10), col, 2)
-        if result.hand_landmarks:
-            p = ((lms[4].x-lms[8].x)**2 + (lms[4].y-lms[8].y)**2)**0.5
-            cv2.putText(frame, f"{p:.2f}", (10,20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,200), 1)
+        cv2.circle(disp, (sx,sy), 8, col, 3)
+        cv2.line(disp, (sx-12,sy), (sx+12,sy), col, 2)
+        cv2.line(disp, (sx,sy-12), (sx,sy+12), col, 2)
 
     px, py = 10, H - CH - 10
     fr = cv2.resize(frame, (CW, CH))
     disp[py:py+CH, px:px+CW] = fr
     cv2.rectangle(disp, (px,py), (px+CW,py+CH), (80,80,80), 2)
+
+    est = "DIBUJANDO" if drawing else "LISTO"
+    ecol = (0,200,0) if drawing else (100,100,100)
+    cv2.putText(disp, est, (15, H-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, ecol, 2)
+    cv2.putText(disp, "1-6 color +/- tamano C limpiar", (W-270, H-10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120,120,120), 1)
 
     cv2.imshow("Pizarra", disp)
     key = cv2.waitKey(1) & 0xFF
