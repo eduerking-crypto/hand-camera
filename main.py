@@ -120,7 +120,7 @@ while cap.isOpened():
             if i in [4, 8, 12, 16, 20]:
                 cv2.circle(frame, (cx, cy), 4, (255, 255, 0), -1)
 
-        cx = int((1 - lms[8].x) * WBOARD_W)
+        cx = int(lms[8].x * WBOARD_W)
         cy = int(lms[8].y * WBOARD_H)
         if smooth_pos is None:
             smooth_pos = (cx, cy)
