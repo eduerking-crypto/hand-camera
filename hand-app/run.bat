@@ -1,0 +1,1 @@
+@"%LOCALAPPDATA%\Python\bin\python.exe" -u "%~dp0main.py"
